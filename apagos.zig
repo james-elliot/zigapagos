@@ -10,7 +10,7 @@ const FIND_SHORTEST: bool = false; // Find shortest path/best defence, or simply
 const USE_BMOVE: bool = true; // Looks like, for finding the shortest solution, it is better not to use bmove...
 
 // 27 bits use 2GB
-const NB_BITS: u8 = 31;
+const NB_BITS: u8 = 28;
 
 const MAX_PAWNS: usize = 2 * NB_PLATES - 1;
 const Vals = i16;
@@ -158,6 +158,7 @@ fn play_move(
     tab = n_tab;
     return v;
 }
+
 var best_move: Move = undefined;
 fn updateab(color: Colors, depth: Depth, base: Depth, v: Vals, a: *Vals, b: *Vals, g: *Vals, p: u64, lmove: *Move) bool {
     if (color == WHITE) {
@@ -402,9 +403,11 @@ pub fn main() !void {
     var base: Depth = 0;
     var t: i64 = undefined;
     var ret: Vals = undefined;
-    var color: Colors = WHITE;
-    //    var buf: [1000]u8 = undefined;
+    var buf: [1000]u8 = undefined;
+    var oppmove: Move = undefined;
+    var color: Colors = undefined;
 
+    color = WHITE;
     while (true) {
         best_move = InvalidMove;
         t = std.time.milliTimestamp();
@@ -421,14 +424,23 @@ pub fn main() !void {
         try print_pos();
         try stdout.print("\n", .{});
         base += 1;
+        if (rem_cols[EMPTY] == 0) break;
         color = if (color == WHITE) BLACK else WHITE;
 
-        //        try stdout.print("Your move:", .{});
-        //      if (try stdin.readUntilDelimiterOrEof(&buf, '\n')) |m| {
-        //        std.debug.print("msg: {s}\n", .{m});
-        //      const i = std.fmt.parseInt(Move, m, 10) catch InvalidMove;
-        //    std.debug.print("i: {d}\n", .{i});
-        //        }
+        while (true) {
+            try stdout.print("Your move:", .{});
+            if (try stdin.readUntilDelimiterOrEof(&buf, '\n')) |m| {
+                oppmove = std.fmt.parseInt(Move, m, 10) catch InvalidMove;
+            }
+            if (really_play_move(oppmove, color)) {
+                break;
+            }
+        }
+        try print_move(oppmove);
+        try print_pos();
+        color = if (color == WHITE) BLACK else WHITE;
+        if (rem_cols[EMPTY] == 0) break;
+        base += 1;
     }
 }
 
