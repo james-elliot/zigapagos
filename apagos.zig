@@ -1,10 +1,18 @@
 const std = @import("std");
 
-// 27 bits use 2GB
-const NB_BITS: u8 = 28;
-const NB_PLATES: usize = 4;
-const MAX_PAWNS: usize = 2 * NB_PLATES - 1;
+const stdin = std.io.getStdIn().reader();
+const stdout = std.io.getStdOut().writer();
+const stderr = std.io.getStdErr().writer();
 
+const NB_PLATES: usize = 4;
+const NB_PAWNS_BY_COLOR: u8 = 10; // We need at least (NB_PLATES*NB_PLATES)/2 marbles for each color
+const FIND_SHORTEST: bool = false; // Find shortest path/best defence, or simply win/lose
+const USE_BMOVE: bool = true; // Looks like, for finding the shortest solution, it is better not to use bmove...
+
+// 27 bits use 2GB
+const NB_BITS: u8 = 31;
+
+const MAX_PAWNS: usize = 2 * NB_PLATES - 1;
 const Vals = i16;
 const Vals_min: Vals = std.math.minInt(Vals);
 const Vals_max: Vals = std.math.maxInt(Vals);
@@ -14,23 +22,23 @@ const Sigs = u64;
 const Move = u16;
 const InvalidMove: Move = std.math.maxInt(Move);
 const Win = Vals_max - 1;
-//const Win = 1;
 
 const EMPTY: Colors = 0;
 const WHITE: Colors = 1;
 const BLACK: Colors = 2;
 const NB_COLS: usize = BLACK + 1;
-const HASH_SIZE: usize = 1 << NB_BITS;
-const HASH_MASK: Sigs = HASH_SIZE - 1;
 
 var tab: [NB_PLATES][NB_COLS]u8 = undefined;
 var pos: [NB_PLATES]u8 = undefined;
 var rems: u8 = undefined;
 var rem_cols: [NB_COLS]u8 = undefined;
 
+const HASH_SIZE: usize = 1 << NB_BITS;
+const HASH_MASK: Sigs = HASH_SIZE - 1;
 var hashesw: [NB_PLATES][MAX_PAWNS + 1]Sigs = undefined;
 var hashesb: [NB_PLATES][MAX_PAWNS + 1]Sigs = undefined;
 var hashesp: [NB_PLATES][NB_PLATES]Sigs = undefined;
+var hash_black: Sigs = undefined;
 
 const HashElem = packed struct {
     sig: Sigs,
@@ -50,11 +58,11 @@ const ZHASH = HashElem{
 
 var hashes: []HashElem = undefined;
 
-fn retrieve(hv: Sigs, v_inf: *Vals, v_sup: *Vals, lmove: *Move, depth: Depth) bool {
+fn retrieve(hv: Sigs, v_inf: *Vals, v_sup: *Vals, bmove: *Move, depth: Depth) bool {
     const ind: usize = hv & HASH_MASK;
     const d = std.math.maxInt(Depth) - depth;
     if (hashes[ind].sig == hv) {
-        lmove.* = hashes[ind].bmove;
+        bmove.* = hashes[ind].bmove;
         if (hashes[ind].d == d) {
             v_inf.* = hashes[ind].v_inf;
             v_sup.* = hashes[ind].v_sup;
@@ -86,7 +94,7 @@ fn store(hv: Sigs, alpha: Vals, beta: Vals, g: Vals, depth: Depth, bmove: Move) 
     }
 }
 
-fn compute_hash() Sigs {
+fn compute_hash(color: Colors) Sigs {
     var h: Sigs = 0;
     for (0..NB_PLATES) |i| {
         h ^= hashesw[i][tab[i][WHITE]];
@@ -94,6 +102,9 @@ fn compute_hash() Sigs {
     }
     for (0..NB_PLATES) |i| {
         h ^= hashesp[i][pos[i]];
+    }
+    if (color == BLACK) {
+        h ^= hash_black;
     }
     return h;
 }
@@ -118,11 +129,11 @@ fn play_pos(
         pos[p1] = b2;
         pos[p2] = b1;
     }
-    rems -= 1;
+    rem_cols[EMPTY] -= 1;
     rem_cols[color] -= 1;
     const v = ab(a, b, oppcol, depth + 1, base);
     rem_cols[color] += 1;
-    rems += 1;
+    rem_cols[EMPTY] += 1;
     pos = n_pos;
     tab = n_tab;
     return v;
@@ -172,21 +183,29 @@ fn updateab(color: Colors, depth: Depth, base: Depth, v: Vals, a: *Vals, b: *Val
 }
 
 fn ab(alp: Vals, bet: Vals, color: Colors, depth: Depth, base: Depth) Vals {
-    if (rems == 0) {
+    //    if (depth == base + 1) {
+    //      print_pos() catch unreachable;
+    //}
+    if (rem_cols[EMPTY] == 0) {
         if (tab[pos[NB_PLATES - 1]][WHITE] > tab[pos[NB_PLATES - 1]][BLACK]) {
-            return Win - @as(Vals, depth);
-            //return 1;
+            if (FIND_SHORTEST) {
+                return Win - @as(Vals, depth);
+            } else {
+                return 1;
+            }
         } else {
-            return -Win + @as(Vals, depth);
-            //return -1;
+            if (FIND_SHORTEST) {
+                return -Win + @as(Vals, depth);
+            } else {
+                return -1;
+            }
         }
     }
 
     var alpha = alp;
     var beta = bet;
-    var lmove: Move = InvalidMove;
     var bmove: Move = InvalidMove;
-    const hv = compute_hash();
+    const hv = compute_hash(color);
     var v_inf: Vals = undefined;
     var v_sup: Vals = undefined;
     if (retrieve(hv, &v_inf, &v_sup, &bmove, depth)) {
@@ -200,16 +219,39 @@ fn ab(alp: Vals, bet: Vals, color: Colors, depth: Depth, base: Depth) Vals {
         beta = @min(beta, v_sup);
     }
 
+    if (!USE_BMOVE) bmove = InvalidMove;
+
     var a = alpha;
     var b = beta;
+    var lmove: Move = InvalidMove;
 
     const oppcol = if (color == WHITE) BLACK else WHITE;
     var g: Vals = if (color == WHITE) Vals_min else Vals_max;
     const n_tab = tab;
     const n_pos = pos;
-
     outer: {
+        if (bmove != InvalidMove) {
+            if (bmove < 8) {
+                const v = play_pos(a, b, depth, base, bmove, color, oppcol, n_pos, n_tab);
+                if (updateab(color, depth, base, v, &a, &b, &g, bmove, &lmove)) {
+                    break :outer;
+                }
+            } else if (bmove < 16) {
+                const v = play_pos(a, b, depth, base, bmove - 8, oppcol, oppcol, n_pos, n_tab);
+                if (updateab(color, depth, base, v, &a, &b, &g, bmove, &lmove)) {
+                    break :outer;
+                }
+            } else {
+                const k1 = (bmove - 16) % 8;
+                const k2 = (bmove - 16) / 8;
+                const v = play_move(a, b, depth, base, k1, k2, color, oppcol, n_tab);
+                if (updateab(color, depth, base, v, &a, &b, &g, bmove, &lmove)) {
+                    break :outer;
+                }
+            }
+        }
         for (0..NB_PLATES) |p| {
+            if (p == bmove) continue;
             if ((tab[pos[p]][EMPTY] > 0) and (rem_cols[color] > 0)) {
                 const v = play_pos(a, b, depth, base, p, color, oppcol, n_pos, n_tab);
                 if (updateab(color, depth, base, v, &a, &b, &g, p, &lmove)) {
@@ -218,6 +260,7 @@ fn ab(alp: Vals, bet: Vals, color: Colors, depth: Depth, base: Depth) Vals {
             }
         }
         for (0..NB_PLATES) |p| {
+            if ((p + 8) == bmove) continue;
             if ((tab[pos[p]][EMPTY] > 0) and (rem_cols[oppcol] > 0)) {
                 const v = play_pos(a, b, depth, base, p, oppcol, oppcol, n_pos, n_tab);
                 if (updateab(color, depth, base, v, &a, &b, &g, p + 8, &lmove)) {
@@ -228,6 +271,7 @@ fn ab(alp: Vals, bet: Vals, color: Colors, depth: Depth, base: Depth) Vals {
         for (1..NB_PLATES) |p| {
             if (tab[pos[p]][color] > 0) {
                 for (0..p) |k| {
+                    if ((16 + p + (k * 8)) == bmove) continue;
                     if (tab[pos[k]][EMPTY] > 0) {
                         const v = play_move(a, b, depth, base, p, k, color, oppcol, n_tab);
                         if (updateab(color, depth, base, v, &a, &b, &g, 16 + p + (k * 8), &lmove)) {
@@ -242,9 +286,11 @@ fn ab(alp: Vals, bet: Vals, color: Colors, depth: Depth, base: Depth) Vals {
     return g;
 }
 
-fn print_pos(stdout: std.fs.File.Writer) !void {
+//fn print_pos(stdout: std.fs.File.Writer) !void {
+fn print_pos() !void {
     for (0..NB_PLATES) |i| {
         const p = pos[NB_PLATES - 1 - i];
+        try stdout.print("{d}: ", .{NB_PLATES - 1 - i});
         for (0..tab[p][WHITE]) |_| {
             try stdout.print("O ", .{});
         }
@@ -256,9 +302,14 @@ fn print_pos(stdout: std.fs.File.Writer) !void {
         }
         try stdout.print("\n", .{});
     }
+    for (0..NB_COLS) |i| {
+        try stdout.print("rems[{d}]:{d} ", .{ i, rem_cols[i] });
+    }
+    try stdout.print("\n", .{});
 }
 
-fn print_move(stdout: std.fs.File.Writer, m: Move) !void {
+//fn print_move(stdout: std.fs.File.Writer, m: Move) !void {
+fn print_move(m: Move) !void {
     if (m < 8) {
         try stdout.print("I put my marble on:{d}\n", .{m});
     } else if (m < 16) {
@@ -273,7 +324,7 @@ fn really_play_move(m: Move, color: Colors) bool {
         const p1 = m;
         if (p1 >= NB_PLATES) return false;
         const b1 = pos[p1];
-        if ((rems == 0) or (rem_cols[color] == 0) or (tab[b1][EMPTY] == 0)) {
+        if ((rem_cols[EMPTY] == 0) or (rem_cols[color] == 0) or (tab[b1][EMPTY] == 0)) {
             return false;
         }
         tab[b1][EMPTY] -= 1;
@@ -284,14 +335,14 @@ fn really_play_move(m: Move, color: Colors) bool {
             pos[p1] = b2;
             pos[p2] = b1;
         }
-        rems -= 1;
+        rem_cols[EMPTY] -= 1;
         rem_cols[color] -= 1;
     } else if (m < 16) {
         const p1 = m - 8;
         if (p1 >= NB_PLATES) return false;
         const b1 = pos[p1];
         const oppcol = if (color == WHITE) BLACK else WHITE;
-        if ((rems == 0) or (rem_cols[oppcol] == 0) or (tab[b1][EMPTY] == 0)) {
+        if ((rem_cols[EMPTY] == 0) or (rem_cols[oppcol] == 0) or (tab[b1][EMPTY] == 0)) {
             return false;
         }
         tab[b1][EMPTY] -= 1;
@@ -302,7 +353,7 @@ fn really_play_move(m: Move, color: Colors) bool {
             pos[p1] = b2;
             pos[p2] = b1;
         }
-        rems -= 1;
+        rem_cols[EMPTY] -= 1;
         rem_cols[oppcol] -= 1;
     } else {
         const k1 = (m - 16) % 8;
@@ -320,19 +371,16 @@ fn really_play_move(m: Move, color: Colors) bool {
 }
 
 pub fn main() !void {
-    const stdout = std.io.getStdOut().writer();
-    const stdin = std.io.getStdIn().reader();
-
     for (0..NB_PLATES) |i| {
         pos[i] = @as(u8, @intCast(i));
         tab[i][EMPTY] = 2 * @as(u8, @intCast(i)) + 1;
         tab[i][WHITE] = 0;
         tab[i][BLACK] = 0;
     }
-    rems = NB_PLATES * NB_PLATES;
-    rem_cols[WHITE] = 10;
-    rem_cols[BLACK] = 10;
-    try print_pos(stdout);
+    rem_cols[EMPTY] = NB_PLATES * NB_PLATES;
+    rem_cols[WHITE] = NB_PAWNS_BY_COLOR;
+    rem_cols[BLACK] = NB_PAWNS_BY_COLOR;
+    try print_pos();
 
     const allocator = std.heap.page_allocator;
     const RndGen = std.Random.DefaultPrng;
@@ -349,36 +397,38 @@ pub fn main() !void {
     for (&hashesp) |*b| {
         for (b) |*a| a.* = rnd.random().int(Sigs);
     }
+    hash_black = rnd.random().int(Sigs);
 
     var base: Depth = 0;
     var t: i64 = undefined;
     var ret: Vals = undefined;
-    const color: Colors = WHITE;
-    var buf: [1000]u8 = undefined;
+    var color: Colors = WHITE;
+    //    var buf: [1000]u8 = undefined;
 
     while (true) {
         best_move = InvalidMove;
         t = std.time.milliTimestamp();
-        ret = ab(Vals_min, Vals_max, WHITE, base, base);
+        ret = ab(Vals_min, Vals_max, color, base, base);
         if (best_move == InvalidMove) {
             break;
         }
         t = std.time.milliTimestamp() - t;
-        try stdout.print("t={d}ms\n", .{t});
-        try stdout.print("ret={d}\n", .{ret});
-        try stdout.print("best_move={d}\n", .{best_move});
-        try print_move(stdout, best_move);
+        try stdout.print("t={d}ms ret={d} best_move={d}\n", .{ t, ret, best_move });
+        try print_move(best_move);
         if (!(really_play_move(best_move, color))) {
             break;
         }
-        try print_pos(stdout);
+        try print_pos();
+        try stdout.print("\n", .{});
         base += 1;
-        try stdout.print("Your move:", .{});
-        if (try stdin.readUntilDelimiterOrEof(&buf, '\n')) |m| {
-            std.debug.print("msg: {s}\n", .{m});
-            const i = std.fmt.parseInt(Move, m, 10) catch InvalidMove;
-            std.debug.print("i: {d}\n", .{i});
-        }
+        color = if (color == WHITE) BLACK else WHITE;
+
+        //        try stdout.print("Your move:", .{});
+        //      if (try stdin.readUntilDelimiterOrEof(&buf, '\n')) |m| {
+        //        std.debug.print("msg: {s}\n", .{m});
+        //      const i = std.fmt.parseInt(Move, m, 10) catch InvalidMove;
+        //    std.debug.print("i: {d}\n", .{i});
+        //        }
     }
 }
 
