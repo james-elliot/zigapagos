@@ -4,10 +4,11 @@ const stdin = std.io.getStdIn().reader();
 const stdout = std.io.getStdOut().writer();
 const stderr = std.io.getStdErr().writer();
 
+// La résolution du 5 plateaux avec 15 billes prend 21000s
 const NB_PLATES: usize = 4;
 const NB_PAWNS_BY_COLOR: u8 = 10; // We need at least (NB_PLATES*NB_PLATES)/2 marbles for each color
-const FIND_SHORTEST: bool = false; // Find shortest path/best defence, or simply win/lose
-const USE_BMOVE: bool = true; // Looks like, for finding the shortest solution, it is better not to use bmove...
+const FIND_SHORTEST: bool = true; // Find shortest path/best defence, or simply win/lose
+const USE_BMOVE: bool = false; // Looks like, for finding the shortest solution, it is better not to use bmove...
 
 // 27 bits use 2GB
 const NB_BITS: u8 = 28;
