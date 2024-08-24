@@ -65,7 +65,7 @@ fn retrieve(hv: Sigs, v_inf: *Vals, v_sup: *Vals, bmove: *Move, depth: Depth) bo
     const d = std.math.maxInt(Depth) - depth;
     if (hashes[ind].sig == hv) {
         bmove.* = hashes[ind].bmove;
-        if (hashes[ind].d == d) {
+        if ((hashes[ind].d >= d) or (hashes[ind].d <= d)) {
             v_inf.* = hashes[ind].v_inf;
             v_sup.* = hashes[ind].v_sup;
             return true;
@@ -107,6 +107,26 @@ fn compute_hash(color: Colors) Sigs {
     }
     if (color == BLACK) h ^= hash_black;
     return h;
+}
+
+fn compute_hash2(color: Colors) Sigs {
+    var h: [NB_COLS]Sigs = [NB_COLS]Sigs{ 0, 0, 0 };
+    var hp: Sigs = 0;
+    for (WHITE..BLACK + 1) |i| {
+        h[i] |= @as(Sigs, tab[0][i]);
+        h[i] |= @as(Sigs, tab[1][i]) << 1;
+        h[i] |= @as(Sigs, tab[2][i]) << 3;
+        h[i] |= @as(Sigs, tab[3][i]) << 6;
+    }
+    var dec: u6 = 0;
+    for (0..NB_PLATES) |i| {
+        hp |= @as(Sigs, pos[i]) << dec;
+        dec += 2;
+    }
+    if (color == WHITE)
+        return h[WHITE] | (h[BLACK] << 9) | (hp << 18)
+    else
+        return h[WHITE] | (h[BLACK] << 9) | (hp << 18) | (1 << 26);
 }
 
 fn play_pos(
@@ -179,6 +199,8 @@ fn updateab(color: Colors, depth: Depth, base: Depth, v: Vals, a: *Vals, b: *Val
     return (a.* >= b.*);
 }
 
+var hit: u64 = 0;
+var nodes: u64 = 0;
 fn ab(alp: Vals, bet: Vals, color: Colors, depth: Depth, base: Depth) Vals {
     //    if (depth == base + 1) {
     //      print_pos() catch unreachable;
@@ -190,11 +212,11 @@ fn ab(alp: Vals, bet: Vals, color: Colors, depth: Depth, base: Depth) Vals {
             if (FIND_SHORTEST) return -Win + @as(Vals, depth) else return -1;
         }
     }
-
+    nodes += 1;
     var alpha = alp;
     var beta = bet;
     var bmove: Move = InvalidMove;
-    const hv = compute_hash(color);
+    const hv = compute_hash2(color);
     var v_inf: Vals = undefined;
     var v_sup: Vals = undefined;
     if (retrieve(hv, &v_inf, &v_sup, &bmove, depth)) {
@@ -204,6 +226,7 @@ fn ab(alp: Vals, bet: Vals, color: Colors, depth: Depth, base: Depth) Vals {
         if (v_sup <= alpha) return v_sup;
         alpha = @max(alpha, v_inf);
         beta = @min(beta, v_sup);
+        hit += 1;
     }
 
     if (!USE_BMOVE) bmove = InvalidMove;
@@ -330,6 +353,11 @@ fn really_play_move(m: Move, color: Colors) bool {
 }
 
 pub fn main() !void {
+    var args = std.process.args();
+    _ = args.next();
+    const sturn = args.next().?;
+    var turn = std.fmt.parseInt(u8, sturn, 10) catch 0;
+    if ((turn != 1) and (turn != 2)) std.posix.exit(255);
     for (0..NB_PLATES) |i| {
         pos[i] = @as(u8, @intCast(i));
         tab[i][EMPTY] = 2 * @as(u8, @intCast(i)) + 1;
@@ -365,27 +393,32 @@ pub fn main() !void {
     var oppmove: Move = undefined;
     var color: Colors = undefined;
 
-    color = WHITE;
+    color = if (turn == 1) WHITE else BLACK;
     while (true) {
-        best_move = InvalidMove;
-        t = std.time.milliTimestamp();
-        ret = ab(Vals_min, Vals_max, color, base, base);
-        if (best_move == InvalidMove) break;
-        t = std.time.milliTimestamp() - t;
-        try stderr.print("t={d}ms ret={d} best_move={d}\n", .{ t, ret, best_move });
-        try print_move(best_move);
-        if (!(really_play_move(best_move, color))) break;
-        try print_pos();
-        try stdout.print("{d}\n", .{best_move});
-        try stderr.print("\n", .{});
-        base += 1;
-        color = if (color == WHITE) BLACK else WHITE;
-        if (rem_cols[EMPTY] == 0) break;
-
+        if (turn == 1) {
+            best_move = InvalidMove;
+            t = std.time.milliTimestamp();
+            hit = 0;
+            nodes = 0;
+            ret = ab(Vals_min, Vals_max, color, base, base);
+            if (best_move == InvalidMove) break;
+            t = std.time.milliTimestamp() - t;
+            try stderr.print("t={d}ms ret={d} nodes={d} hit={d} best_move={d}\n", .{ t, ret, nodes, hit, best_move });
+            try print_move(best_move);
+            if (!(really_play_move(best_move, color))) break;
+            try print_pos();
+            try stdout.print("{d}\n", .{best_move});
+            try stderr.print("\n", .{});
+            base += 1;
+            color = if (color == WHITE) BLACK else WHITE;
+            if (rem_cols[EMPTY] == 0) break;
+        }
+        turn = 1;
         while (true) {
             try stderr.print("Your move:", .{});
             if (try stdin.readUntilDelimiterOrEof(&buf, '\n')) |m| oppmove = std.fmt.parseInt(Move, m, 10) catch InvalidMove;
             if (really_play_move(oppmove, color)) break;
+            try stdout.print("Invalid move:{d}\n", .{oppmove});
         }
         try print_move(oppmove);
         try print_pos();
