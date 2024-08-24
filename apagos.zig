@@ -264,23 +264,23 @@ fn ab(alp: Vals, bet: Vals, color: Colors, depth: Depth, base: Depth) Vals {
 fn print_pos() !void {
     for (0..NB_PLATES) |i| {
         const p = pos[NB_PLATES - 1 - i];
-        try stdout.print("{d}: ", .{NB_PLATES - 1 - i});
-        for (0..tab[p][WHITE]) |_| try stdout.print("O ", .{});
-        for (0..tab[p][BLACK]) |_| try stdout.print("X ", .{});
-        for (0..tab[p][EMPTY]) |_| try stdout.print(". ", .{});
-        try stdout.print("\n", .{});
+        try stderr.print("{d}: ", .{NB_PLATES - 1 - i});
+        for (0..tab[p][WHITE]) |_| try stderr.print("O ", .{});
+        for (0..tab[p][BLACK]) |_| try stderr.print("X ", .{});
+        for (0..tab[p][EMPTY]) |_| try stderr.print(". ", .{});
+        try stderr.print("\n", .{});
     }
-    for (0..NB_COLS) |i| try stdout.print("rems[{d}]:{d} ", .{ i, rem_cols[i] });
-    try stdout.print("\n", .{});
+    for (0..NB_COLS) |i| try stderr.print("rems[{d}]:{d} ", .{ i, rem_cols[i] });
+    try stderr.print("\n", .{});
 }
 
 fn print_move(m: Move) !void {
     if (m < 8) {
-        try stdout.print("I put my marble on:{d}\n", .{m});
+        try stderr.print("I put my marble on:{d}\n", .{m});
     } else if (m < 16) {
-        try stdout.print("I put YOUR marble on:{d}\n", .{(m - 8)});
+        try stderr.print("I put YOUR marble on:{d}\n", .{(m - 8)});
     } else {
-        try stdout.print("I move my marble from {d} to {d}\n", .{ (m - 16) % 8, (m - 16) / 8 });
+        try stderr.print("I move my marble from {d} to {d}\n", .{ (m - 16) % 8, (m - 16) / 8 });
     }
 }
 
@@ -372,17 +372,18 @@ pub fn main() !void {
         ret = ab(Vals_min, Vals_max, color, base, base);
         if (best_move == InvalidMove) break;
         t = std.time.milliTimestamp() - t;
-        try stdout.print("t={d}ms ret={d} best_move={d}\n", .{ t, ret, best_move });
+        try stderr.print("t={d}ms ret={d} best_move={d}\n", .{ t, ret, best_move });
         try print_move(best_move);
         if (!(really_play_move(best_move, color))) break;
         try print_pos();
-        try stdout.print("\n", .{});
+        try stdout.print("{d}\n", .{best_move});
+        try stderr.print("\n", .{});
         base += 1;
         color = if (color == WHITE) BLACK else WHITE;
         if (rem_cols[EMPTY] == 0) break;
 
         while (true) {
-            try stdout.print("Your move:", .{});
+            try stderr.print("Your move:", .{});
             if (try stdin.readUntilDelimiterOrEof(&buf, '\n')) |m| oppmove = std.fmt.parseInt(Move, m, 10) catch InvalidMove;
             if (really_play_move(oppmove, color)) break;
         }
