@@ -1,3 +1,6 @@
+// Pure solver. Works for 4 and 5 plates
+// The most difficult case is 5 plates with 13 marbles for each player
+
 const std = @import("std");
 
 const stdin = std.io.getStdIn().reader();
@@ -6,15 +9,14 @@ const stderr = std.io.getStdErr().writer();
 
 // Number of plates must be less or equal to 8
 const NB_PLATES: usize = 5;
-const NB_PAWNS_BY_COLOR: u8 = 15; // We need at least (NB_PLATES*NB_PLATES)/2 marbles for each color
-const FIND_SHORTEST: bool = true; // Find shortest path/best defence, or simply win/lose
-const USE_BMOVE: bool = false; // Looks like, for finding the shortest solution, it is better not to use bmove...
+const NB_PAWNS_BY_COLOR: u8 = 13; // We need at least (NB_PLATES*NB_PLATES+1)/2 marbles for each color
+const USE_BMOVE: bool = true;
 
 // 27 bits use 2GB
 const NB_BITS: u8 = 29;
 
 const MAX_PAWNS: usize = 2 * NB_PLATES - 1;
-const Vals = i16;
+const Vals = i8;
 const Vals_min: Vals = std.math.minInt(Vals);
 const Vals_max: Vals = std.math.maxInt(Vals);
 const Depth = u8;
@@ -22,7 +24,6 @@ const Colors = u8;
 const Sigs = u64;
 const Move = u16;
 const InvalidMove: Move = std.math.maxInt(Move);
-const Win = Vals_max - 1;
 
 const EMPTY: Colors = 0;
 const WHITE: Colors = 1;
@@ -45,8 +46,7 @@ const HashElem = packed struct {
     sig: Sigs,
     v_inf: Vals,
     v_sup: Vals,
-    base: Depth,
-    dist: Depth,
+    d: Depth,
     bmove: Move,
 };
 
@@ -54,36 +54,32 @@ const ZHASH = HashElem{
     .sig = 0,
     .v_inf = Vals_min,
     .v_sup = Vals_max,
-    .base = 0,
-    .dist = 0,
+    .d = std.math.maxInt(Depth),
     .bmove = InvalidMove,
 };
 
 var hashes: []HashElem = undefined;
 
-fn retrieve(hv: Sigs, v_inf: *Vals, v_sup: *Vals, bmove: *Move, dist: Depth) bool {
+fn retrieve(hv: Sigs, v_inf: *Vals, v_sup: *Vals, bmove: *Move) bool {
     const ind: usize = hv & HASH_MASK;
     if (hashes[ind].sig == hv) {
         bmove.* = hashes[ind].bmove;
-        if (hashes[ind].dist == dist) {
-            v_inf.* = hashes[ind].v_inf;
-            v_sup.* = hashes[ind].v_sup;
-            return true;
-        }
+        v_inf.* = hashes[ind].v_inf;
+        v_sup.* = hashes[ind].v_sup;
+        return true;
     }
     return false;
 }
 
-fn store(hv: Sigs, alpha: Vals, beta: Vals, g: Vals, dist: Depth, base: Depth, bmove: Move) void {
+fn store(hv: Sigs, alpha: Vals, beta: Vals, g: Vals, depth: Depth, bmove: Move) void {
     const ind = hv & HASH_MASK;
-    if ((hashes[ind].base != base) or (hashes[ind].dist <= dist)) {
-        if ((hashes[ind].sig != hv) or (hashes[ind].dist != dist)) {
-            hashes[ind].dist = dist;
+    if (hashes[ind].d >= depth) {
+        hashes[ind].d = depth;
+        if (hashes[ind].sig != hv) {
             hashes[ind].v_inf = Vals_min;
             hashes[ind].v_sup = Vals_max;
             hashes[ind].sig = hv;
         }
-        hashes[ind].base = base;
         hashes[ind].bmove = bmove;
         if ((g > alpha) and (g < beta)) {
             hashes[ind].v_inf = g;
@@ -109,7 +105,7 @@ fn compute_hash(color: Colors) Sigs {
     return h;
 }
 
-// Exact hash, to be used only for 4 plates
+// Exact hash, to be used only for 4 plates with 27 bits for the size of the hash table
 fn compute_hash2(color: Colors) Sigs {
     var h: [NB_COLS]Sigs = [NB_COLS]Sigs{ 0, 0, 0 };
     var hp: Sigs = 0;
@@ -133,7 +129,6 @@ fn compute_hash2(color: Colors) Sigs {
 fn play_pos(
     a: Vals,
     b: Vals,
-    maxdepth: Depth,
     depth: Depth,
     base: Depth,
     p1: usize,
@@ -153,7 +148,7 @@ fn play_pos(
     }
     rem_cols[EMPTY] -= 1;
     rem_cols[color] -= 1;
-    const v = ab(a, b, oppcol, maxdepth, depth + 1, base);
+    const v = ab(a, b, oppcol, depth + 1, base);
     rem_cols[color] += 1;
     rem_cols[EMPTY] += 1;
     pos = n_pos;
@@ -164,7 +159,6 @@ fn play_pos(
 fn play_move(
     a: Vals,
     b: Vals,
-    maxdepth: Depth,
     depth: Depth,
     base: Depth,
     k1: usize,
@@ -177,7 +171,7 @@ fn play_move(
     tab[pos[k1]][EMPTY] += 1;
     tab[pos[k2]][color] += 1;
     tab[pos[k2]][EMPTY] -= 1;
-    const v = ab(a, b, oppcol, maxdepth, depth + 1, base);
+    const v = ab(a, b, oppcol, depth + 1, base);
     tab = n_tab;
     return v;
 }
@@ -202,26 +196,19 @@ fn updateab(color: Colors, depth: Depth, base: Depth, v: Vals, a: *Vals, b: *Val
     return (a.* >= b.*);
 }
 
-fn eval(depth: Depth) Vals {
-    if (rem_cols[EMPTY] == 0) {
-        if (tab[pos[NB_PLATES - 1]][WHITE] > tab[pos[NB_PLATES - 1]][BLACK]) {
-            return Win - depth;
-        } else {
-            return -Win + depth;
-        }
-    }
-    var v: Vals = 0;
-    for (0..NB_PLATES) |i| {
-        if (tab[i][WHITE] > tab[i][BLACK]) v += @as(Vals, @intCast(i));
-        if (tab[i][WHITE] < tab[i][BLACK]) v -= @as(Vals, @intCast(i));
-    }
-    return v;
-}
-
 var hit: u64 = 0;
 var nodes: u64 = 0;
-fn ab(alp: Vals, bet: Vals, color: Colors, maxdepth: Depth, depth: Depth, base: Depth) Vals {
-    if ((depth == maxdepth) or (rem_cols[EMPTY] == 0)) return eval(depth);
+fn ab(alp: Vals, bet: Vals, color: Colors, depth: Depth, base: Depth) Vals {
+    //    if (depth == base + 1) {
+    //      print_pos() catch unreachable;
+    //}
+    if (rem_cols[EMPTY] == 0) {
+        if (tab[pos[NB_PLATES - 1]][WHITE] > tab[pos[NB_PLATES - 1]][BLACK]) {
+            return 1;
+        } else {
+            return -1;
+        }
+    }
     nodes += 1;
     var alpha = alp;
     var beta = bet;
@@ -229,7 +216,7 @@ fn ab(alp: Vals, bet: Vals, color: Colors, maxdepth: Depth, depth: Depth, base: 
     const hv = compute_hash(color);
     var v_inf: Vals = undefined;
     var v_sup: Vals = undefined;
-    if (retrieve(hv, &v_inf, &v_sup, &bmove, maxdepth - depth)) {
+    if (retrieve(hv, &v_inf, &v_sup, &bmove)) {
         if (depth == base) best_move = bmove;
         if (v_inf == v_sup) return v_inf;
         if (v_inf >= beta) return v_inf;
@@ -252,29 +239,29 @@ fn ab(alp: Vals, bet: Vals, color: Colors, maxdepth: Depth, depth: Depth, base: 
     outer: {
         if (bmove != InvalidMove) {
             if (bmove < 8) {
-                const v = play_pos(a, b, maxdepth, depth, base, bmove, color, oppcol, n_pos, n_tab);
+                const v = play_pos(a, b, depth, base, bmove, color, oppcol, n_pos, n_tab);
                 if (updateab(color, depth, base, v, &a, &b, &g, bmove, &lmove)) break :outer;
             } else if (bmove < 16) {
-                const v = play_pos(a, b, maxdepth, depth, base, bmove - 8, oppcol, oppcol, n_pos, n_tab);
+                const v = play_pos(a, b, depth, base, bmove - 8, oppcol, oppcol, n_pos, n_tab);
                 if (updateab(color, depth, base, v, &a, &b, &g, bmove, &lmove)) break :outer;
             } else {
                 const k1 = (bmove - 16) % 8;
                 const k2 = (bmove - 16) / 8;
-                const v = play_move(a, b, maxdepth, depth, base, k1, k2, color, oppcol, n_tab);
+                const v = play_move(a, b, depth, base, k1, k2, color, oppcol, n_tab);
                 if (updateab(color, depth, base, v, &a, &b, &g, bmove, &lmove)) break :outer;
             }
         }
         for (0..NB_PLATES) |p| {
             if (p == bmove) continue;
             if ((tab[pos[p]][EMPTY] > 0) and (rem_cols[color] > 0)) {
-                const v = play_pos(a, b, maxdepth, depth, base, p, color, oppcol, n_pos, n_tab);
+                const v = play_pos(a, b, depth, base, p, color, oppcol, n_pos, n_tab);
                 if (updateab(color, depth, base, v, &a, &b, &g, p, &lmove)) break :outer;
             }
         }
         for (0..NB_PLATES) |p| {
             if ((p + 8) == bmove) continue;
             if ((tab[pos[p]][EMPTY] > 0) and (rem_cols[oppcol] > 0)) {
-                const v = play_pos(a, b, maxdepth, depth, base, p, oppcol, oppcol, n_pos, n_tab);
+                const v = play_pos(a, b, depth, base, p, oppcol, oppcol, n_pos, n_tab);
                 if (updateab(color, depth, base, v, &a, &b, &g, p + 8, &lmove)) break :outer;
             }
         }
@@ -283,14 +270,14 @@ fn ab(alp: Vals, bet: Vals, color: Colors, maxdepth: Depth, depth: Depth, base: 
                 for (0..p) |k| {
                     if ((16 + p + (k * 8)) == bmove) continue;
                     if (tab[pos[k]][EMPTY] > 0) {
-                        const v = play_move(a, b, maxdepth, depth, base, p, k, color, oppcol, n_tab);
+                        const v = play_move(a, b, depth, base, p, k, color, oppcol, n_tab);
                         if (updateab(color, depth, base, v, &a, &b, &g, 16 + p + (k * 8), &lmove)) break :outer;
                     }
                 }
             }
         }
     }
-    store(hv, alpha, beta, g, maxdepth - depth, base, lmove);
+    store(hv, alpha, beta, g, depth, lmove);
     return g;
 }
 
@@ -402,7 +389,7 @@ pub fn main() !void {
     var buf: [1000]u8 = undefined;
     var oppmove: Move = undefined;
     var color: Colors = undefined;
-    var maxdepth: Depth = undefined;
+
     color = if (turn == 1) WHITE else BLACK;
     while (true) {
         if (turn == 1) {
@@ -410,8 +397,7 @@ pub fn main() !void {
             t = std.time.milliTimestamp();
             hit = 0;
             nodes = 0;
-            maxdepth = base + 15;
-            ret = ab(Vals_min, Vals_max, color, maxdepth, base, base);
+            ret = ab(Vals_min, Vals_max, color, base, base);
             if (best_move == InvalidMove) break;
             t = std.time.milliTimestamp() - t;
             try stderr.print("t={d}ms ret={d} nodes={d} hit={d} best_move={d}\n", .{ t, ret, nodes, hit, best_move });
