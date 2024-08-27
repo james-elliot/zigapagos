@@ -9,11 +9,11 @@ const stderr = std.io.getStdErr().writer();
 
 // Number of plates must be less or equal to 8
 const NB_PLATES: usize = 5;
-const NB_PAWNS_BY_COLOR: u8 = 13; // We need at least (NB_PLATES*NB_PLATES+1)/2 marbles for each color
+const NB_PAWNS_BY_COLOR: u8 = 15; // We need at least (NB_PLATES*NB_PLATES+1)/2 marbles for each color
 const USE_BMOVE: bool = true;
 
 // 27 bits use 2GB
-const NB_BITS: u8 = 29;
+const NB_BITS: u8 = 28;
 
 const MAX_PAWNS: usize = 2 * NB_PLATES - 1;
 const Vals = i8;

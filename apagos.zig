@@ -11,7 +11,7 @@ const FIND_SHORTEST: bool = true; // Find shortest path/best defence, or simply 
 const USE_BMOVE: bool = false; // Looks like, for finding the shortest solution, it is better not to use bmove...
 
 // 27 bits use 2GB
-const NB_BITS: u8 = 29;
+const NB_BITS: u8 = 28;
 
 const MAX_PAWNS: usize = 2 * NB_PLATES - 1;
 const Vals = i16;
@@ -23,7 +23,7 @@ const Sigs = u64;
 const Move = u16;
 const InvalidMove: Move = std.math.maxInt(Move);
 const Win = Vals_max - 1;
-
+const Bwin = Win / 2;
 const EMPTY: Colors = 0;
 const WHITE: Colors = 1;
 const BLACK: Colors = 2;
@@ -110,7 +110,7 @@ fn compute_hash(color: Colors) Sigs {
 }
 
 // Exact hash, to be used only for 4 plates
-fn compute_hash2(color: Colors) Sigs {
+fn compute_hash4(color: Colors) Sigs {
     var h: [NB_COLS]Sigs = [NB_COLS]Sigs{ 0, 0, 0 };
     var hp: Sigs = 0;
     for (WHITE..BLACK + 1) |i| {
@@ -204,16 +204,17 @@ fn updateab(color: Colors, depth: Depth, base: Depth, v: Vals, a: *Vals, b: *Val
 
 fn eval(depth: Depth) Vals {
     if (rem_cols[EMPTY] == 0) {
-        if (tab[pos[NB_PLATES - 1]][WHITE] > tab[pos[NB_PLATES - 1]][BLACK]) {
-            return Win - depth;
-        } else {
+        if (tab[pos[NB_PLATES - 1]][WHITE] > tab[pos[NB_PLATES - 1]][BLACK])
+            return Win - depth
+        else
             return -Win + depth;
-        }
     }
     var v: Vals = 0;
     for (0..NB_PLATES) |i| {
-        if (tab[i][WHITE] > tab[i][BLACK]) v += @as(Vals, @intCast(i));
-        if (tab[i][WHITE] < tab[i][BLACK]) v -= @as(Vals, @intCast(i));
+        if (tab[i][EMPTY] >= NB_PLATES - 1 - pos[i]) {
+            if (tab[i][WHITE] > tab[i][BLACK]) v += @as(Vals, @intCast(i));
+            if (tab[i][WHITE] < tab[i][BLACK]) v -= @as(Vals, @intCast(i));
+        }
     }
     return v;
 }
@@ -305,6 +306,7 @@ fn print_pos() !void {
     }
     for (0..NB_COLS) |i| try stderr.print("rems[{d}]:{d} ", .{ i, rem_cols[i] });
     try stderr.print("\n", .{});
+    try stderr.print("eval={d}\n", .{eval(0)});
 }
 
 fn print_move(m: Move) !void {
@@ -406,15 +408,21 @@ pub fn main() !void {
     color = if (turn == 1) WHITE else BLACK;
     while (true) {
         if (turn == 1) {
-            best_move = InvalidMove;
-            t = std.time.milliTimestamp();
-            hit = 0;
-            nodes = 0;
-            maxdepth = base + 15;
-            ret = ab(Vals_min, Vals_max, color, maxdepth, base, base);
-            if (best_move == InvalidMove) break;
-            t = std.time.milliTimestamp() - t;
-            try stderr.print("t={d}ms ret={d} nodes={d} hit={d} best_move={d}\n", .{ t, ret, nodes, hit, best_move });
+            var total_time: i64 = 0;
+            maxdepth = base + 1;
+            ret = 0;
+            while ((total_time < 2000) and (@abs(ret) < Bwin)) {
+                best_move = InvalidMove;
+                t = std.time.milliTimestamp();
+                hit = 0;
+                nodes = 0;
+                ret = ab(Vals_min, Vals_max, color, maxdepth, base, base);
+                if (best_move == InvalidMove) break;
+                t = std.time.milliTimestamp() - t;
+                total_time += t;
+                try stderr.print("depth={d} t={d}ms ret={d} nodes={d} hit={d} best_move={d}\n", .{ maxdepth - base, t, ret, nodes, hit, best_move });
+                maxdepth += 1;
+            }
             try print_move(best_move);
             if (!(really_play_move(best_move, color))) break;
             try print_pos();
